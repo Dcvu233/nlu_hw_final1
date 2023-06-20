@@ -17,12 +17,12 @@ from datetime import datetime
 from tqdm import tqdm
 
 
-def save_and_del(model, epoch, exp_path):
-    torch.save(model.state_dict(), os.path.join(exp_path, f'epoch{epoch}.pth'))
-    if epoch % 5 != 0:
-        last_checkpoint_path = os.path.join(exp_path, f'epoch{epoch-1}.pth')
-        if os.path.exists(last_checkpoint_path):
-            os.remove(last_checkpoint_path)
+# def save_and_del(model, epoch, exp_path):
+#     torch.save(model.state_dict(), os.path.join(exp_path, f'epoch{epoch}.pth'))
+#     if epoch % 5 != 0:
+#         last_checkpoint_path = os.path.join(exp_path, f'epoch{epoch-1}.pth')
+#         if os.path.exists(last_checkpoint_path):
+#             os.remove(last_checkpoint_path)
 
 def ddp_setup(rank, world_size):
     """
@@ -50,17 +50,19 @@ class Trainer:
         self.total_epochs = total_epochs
         self.exp_path = exp_path
         self.gpu_id = gpu_id
-        if check_point == None:
-            self.model = model.to(gpu_id)
-            self.start_epoch = 0
-        else:
-            # self.model.load_state_dict(torch.load(check_point)) 
-            self.model = torch.load(check_point)
-            self.start_epoch = int(check_point.split('.')[0].split('epoch')[1]) + 1
         self.train_data = train_data
         self.optimizer = optimizer
         self.save_every = save_every
+        self.model = model.to(gpu_id)
         self.model = DDP(model, device_ids=[gpu_id])
+
+        if check_point == None:
+            self.start_epoch = 0
+        else:
+            # self.model.load_state_dict(torch.load(check_point)) 
+            # self.model = torch.load(check_point)
+            self.model.module.load_state_dict(torch.load(check_point))
+            self.start_epoch = int(check_point.split('.')[0].split('epoch')[1]) + 1
         self.criterion = nn.CrossEntropyLoss()
         
 
@@ -93,7 +95,7 @@ class Trainer:
     def _save_checkpoint(self, epoch):
         ckp = self.model.module.state_dict()
         # PATH = "checkpoint.pt"
-        PATH = os.path.join(self.exp_path, f'epoch{epoch}') 
+        PATH = os.path.join(self.exp_path, f'epoch{epoch}.pth') 
         torch.save(ckp, PATH)
         print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
 
