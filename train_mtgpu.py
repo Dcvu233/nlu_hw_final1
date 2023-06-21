@@ -9,7 +9,7 @@ import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-from model.my_model import BertLSTM, BertLSTM1
+from model.my_model import BertLSTM1
 from data.dataset import NewsDataset
 import os
 import datetime
@@ -24,14 +24,9 @@ from tqdm import tqdm
 #         if os.path.exists(last_checkpoint_path):
 #             os.remove(last_checkpoint_path)
 
-def ddp_setup(rank, world_size):
-    """
-    Args:
-        rank: Unique identifier of each process
-        world_size: Total number of processes
-    """
+def ddp_setup(rank, world_size, port='12355'):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
+    os.environ["MASTER_PORT"] = port
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
@@ -73,7 +68,7 @@ class Trainer:
         for i in range(output.shape[0]):
             for j in range(target.shape[1]):
                 target[i][j][target_ids[i][j]] = 1
-        loss = self.criterion(output, target)
+        loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
         loss.backward()
         self.optimizer.step()
         return loss.item()
