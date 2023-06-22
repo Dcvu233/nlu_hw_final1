@@ -34,7 +34,8 @@ class Trainer:
     def __init__(
         self,
         model: torch.nn.Module,
-        train_data: DataLoader,
+        train_loader: DataLoader,
+        valid_loader: DataLoader,
         optimizer: torch.optim.Optimizer,
         gpu_id: int,
         exp_path: str,
@@ -45,7 +46,8 @@ class Trainer:
         self.total_epochs = total_epochs
         self.exp_path = exp_path
         self.gpu_id = gpu_id
-        self.train_data = train_data
+        self.train_loader = train_loader
+        self.valid_loader = valid_loader
         self.optimizer = optimizer
         self.save_every = save_every
         self.model = model.to(gpu_id)
@@ -54,58 +56,89 @@ class Trainer:
         if check_point == None:
             self.start_epoch = 0
         else:
-            # self.model.load_state_dict(torch.load(check_point)) 
-            # self.model = torch.load(check_point)
             self.model.module.load_state_dict(torch.load(check_point))
             self.start_epoch = int(check_point.split('.')[0].split('epoch')[1]) + 1
         self.criterion = nn.CrossEntropyLoss()
         
 
-    def _run_batch(self, input_ids, attention_mask, target_ids) -> float:
-        self.optimizer.zero_grad()
-        output = self.model(input_ids, attention_mask, target_ids)
-        target = torch.zeros_like(output)
-        for i in range(output.shape[0]):
-            for j in range(target.shape[1]):
-                target[i][j][target_ids[i][j]] = 1
-        loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
-        loss.backward()
-        self.optimizer.step()
+    def _run_batch(self, input_ids, attention_mask, target_ids, with_grad=True) -> float:
+        if with_grad:
+            self.optimizer.zero_grad()
+            output = self.model(input_ids, attention_mask, target_ids)
+            target = torch.zeros_like(output)
+            for i in range(output.shape[0]):
+                for j in range(target.shape[1]):
+                    target[i][j][target_ids[i][j]] = 1
+            loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
+            loss.backward()
+            self.optimizer.step()
+        else:
+            with torch.no_grad():
+                output = self.model(input_ids, attention_mask, target_ids)
+                target = torch.zeros_like(output)
+                for i in range(output.shape[0]):
+                    for j in range(target.shape[1]):
+                        target[i][j][target_ids[i][j]] = 1
+                loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
         return loss.item()
+    
+    def _run_valid(self):
+        total_loss = 0.0
+        for input_ids, attention_mask, target_ids in self.valid_loader:
+            input_ids = input_ids.to(self.gpu_id)
+            attention_mask = attention_mask.to(self.gpu_id)
+            target_ids = target_ids.to(self.gpu_id)
+            total_loss += self._run_batch(input_ids, attention_mask, target_ids, with_grad=False)
+        return total_loss / len(self.valid_loader)
+        # print(f'当前验证集上的平均loss为{total_loss / len(self.valid_loader)}')
     def _run_epoch(self, epoch):
-        b_sz = len(next(iter(self.train_data))[0])
-        print(f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
-        self.train_data.sampler.set_epoch(epoch)
+        b_sz = len(next(iter(self.train_loader))[0])
+        print(f"[GPU{self.gpu_id}] Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_loader)}")
+        self.train_loader.sampler.set_epoch(epoch)
         total_loss = 0.0
         i = 0
-        t = tqdm(self.train_data, desc=f"Epoch {epoch}/{self.total_epochs}", leave=False) 
-        for input_ids, attention_mask, target_ids in t:
-            i += 1
+        tqdm_train_loader = tqdm(self.train_loader, desc=f"Epoch {epoch}/{self.total_epochs}", leave=False) 
+        for input_ids, attention_mask, target_ids in tqdm_train_loader:
+            # train要做6w多的batch, valid只有1000，那么每5000次train的batch之后做一轮valid
+            i += 1 # 既表示训练到第几个batch（1开始计数），也表示训过的batch总数
             input_ids = input_ids.to(self.gpu_id)
             attention_mask = attention_mask.to(self.gpu_id)
             target_ids = target_ids.to(self.gpu_id)
             total_loss += self._run_batch(input_ids, attention_mask, target_ids)
-            t.set_postfix(loss= total_loss / (i+1))
+            tqdm_train_loader.set_postfix(loss= total_loss / i)
+            if i % 5000 == 0 or i == len(self.train_loader):
+                valid_avg_loss = self._run_valid()
+                if self.now_valid_loss is None or valid_avg_loss < self.now_valid_loss:
+                    self.now_valid_loss = valid_avg_loss
+                    if self.gpu_id == 0:
+                        self._save_checkpoint(epoch, valid_avg_loss)
+                print(f'当前epoch为{epoch}，已在训练集上训了{i}个batch，此时验证集上的平均loss为{valid_avg_loss}')
 
-    def _save_checkpoint(self, epoch):
+    def _save_checkpoint(self, epoch, valid_avg_loss):
         ckp = self.model.module.state_dict()
-        # PATH = "checkpoint.pt"
-        PATH = os.path.join(self.exp_path, f'epoch{epoch}.pth') 
-        torch.save(ckp, PATH)
-        print(f"Epoch {epoch} | Training checkpoint saved at {PATH}")
-
+        ckp_path = os.path.join(self.exp_path, f'epoch{epoch}-valid_loss_{valid_avg_loss}.pth')
+        torch.save(ckp, ckp_path)
+        print(f"Epoch {epoch} | Training checkpoint saved at {ckp_path}")
+    # def _save_checkpoint(self, epoch):
+    #     ckp = self.model.module.state_dict()
+    #     ckp_path = os.path.join(self.exp_path, f'epoch{epoch}.pth') 
+    #     torch.save(ckp, ckp_path)
+    #     print(f"Epoch {epoch} | Training checkpoint saved at {ckp_path}")
+    
     def train(self):
+        self.now_valid_loss = None
         for epoch in range(self.start_epoch, self.total_epochs):
             self._run_epoch(epoch)
-            if self.gpu_id == 0 and epoch % self.save_every == 0:
-                self._save_checkpoint(epoch)
+            # if self.gpu_id == 0 and epoch % self.save_every == 0:
+            #     self._save_checkpoint(epoch)
 
 def load_train_objs(is_small):
-    train_set = NewsDataset(is_small=is_small) 
+    train_set = NewsDataset(is_small=is_small, mode='train')
+    valid_set = NewsDataset(mode='valid') 
     model =  BertLSTM1()
     optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()))
 
-    return train_set, model, optimizer
+    return train_set, model, optimizer, valid_set
 
 
 def prepare_dataloader(dataset: Dataset, batch_size: int):
@@ -119,9 +152,10 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
 
 def main(rank: int, world_size: int, save_every: int, total_epochs: int, batch_size: int, exp_path:str, check_point:str, is_small:bool):
     ddp_setup(rank, world_size)
-    dataset, model, optimizer = load_train_objs(is_small)
-    train_data = prepare_dataloader(dataset, batch_size)
-    trainer = Trainer(model, train_data, optimizer, rank, exp_path, save_every, total_epochs, check_point)
+    train_set, model, optimizer, valid_set = load_train_objs(is_small)
+    train_loader = prepare_dataloader(train_set, batch_size)
+    valid_loader = prepare_dataloader(valid_set, batch_size)
+    trainer = Trainer(model, train_loader, valid_loader, optimizer, rank, exp_path, save_every, total_epochs, check_point)
     trainer.train()
     destroy_process_group()
 

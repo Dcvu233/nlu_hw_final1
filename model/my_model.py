@@ -31,9 +31,11 @@ class BertLSTM1(nn.Module):
         for i in range(50):
             if i > 0:
                 # x = outputs[-1] 
-                x = real_title_embedding[:, i, :].squeeze() if is_train else outputs[-1]
+                x = real_title_embedding[:, i, :].squeeze(1) if is_train else outputs[-1]
+                
             else:
-                x = real_title_embedding[:, i, :].squeeze()
+                x = real_title_embedding[:, i, :].squeeze(1)
+            # print(x.shape, h.shape, c.shape)
             h, c = self.lstm_cell(x, (h, c))
             outputs.append(h)
         # outputs 50, b, 768
@@ -41,26 +43,3 @@ class BertLSTM1(nn.Module):
         outputs = torch.stack(outputs).permute(1,0,2) # b, 50, 768
         outputs = self.fc(outputs) 
         return outputs # b, 50, 21128
-
-    
-if __name__ == '__main__':   
-
-    
-    from data.dataset import NewsDataset
-    test_dataset = NewsDataset()
-    model = BertLSTM1()
-    # print(test_dataset[0])
-    y = model(test_dataset[0][0].unsqueeze(0), test_dataset[0][1].unsqueeze(0), test_dataset[0][2].unsqueeze(0))
-    print(y.shape)
-    res = torch.max(y, dim=2)
-    # print(res.indices.shape)
-    # print(res.indices)
-    
-    # print(y)
-    # NewsDataset() 
-    # tokenizer = BertTokenizer.from_pretrained("bert-base-chinese")
-    # print(tokenizer.decode(y[0]))
-    # print(type(y))
-    # for e in y:
-    #     print(e.shape)
-    # # print(model(x).shape)

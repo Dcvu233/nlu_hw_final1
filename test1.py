@@ -4,7 +4,7 @@ import os
 import torch.distributed as dist
 from data.dataset import NewsDataset
 from transformers import BertTokenizer
-from model.my_model import BertLSTM1, BertLSTM2
+from model.my_model import BertLSTM1
 
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
@@ -68,7 +68,7 @@ tokenizer = BertTokenizer.from_pretrained("bert-base-chinese")
 
 def main(rank: int, world_size: int, check_point:str):
     ddp_setup(rank, world_size, port="12356")
-    model = BertLSTM2()
+    model = BertLSTM1()
     model1 = model.to(rank)
     model1 = DDP(model, device_ids=[rank])
     model1.module.load_state_dict(torch.load(check_point))
@@ -79,11 +79,11 @@ def main(rank: int, world_size: int, check_point:str):
             embedding = tokenizer.encode_plus(line.strip(), padding='max_length', max_length=50, return_tensors='pt')
             tgt = tokenizer.encode_plus(" ", padding='max_length', max_length=50, return_tensors='pt')
             # test_input = (embedding['input_ids'].to(rank), embedding['attention_mask'].to(rank), tgt['input_ids'].to(rank))
-            test_input = (embedding['input_ids'].to(rank), embedding['attention_mask'].to(rank), None)
+            test_input = (embedding['input_ids'].to(rank), embedding['attention_mask'].to(rank), tgt['input_ids'].to(rank))
             softmax = nn.Softmax(dim=-1)
             # nn.Sof
             # output = model1(*test_input)
-            output = model1(*test_input, teacher_forcing_ratio=0)
+            output = model1(*test_input, is_train=False)
             # print(output)
             output = softmax(output)
             # print(output)
@@ -100,5 +100,6 @@ def main(rank: int, world_size: int, check_point:str):
 
 if __name__ == '__main__':
     world_size = torch.cuda.device_count()
-    check_point = 'exp/2023-06-20_22:48:23/epoch17.pth'
+    check_point = 'exp/2023-06-21_16:59:33/epoch18-valid_loss_0.00017228356273239363.pth'
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
     mp.spawn(main, args=(world_size, check_point, ), nprocs=world_size)

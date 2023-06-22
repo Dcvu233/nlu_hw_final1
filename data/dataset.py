@@ -2,15 +2,17 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import BertModel, BertTokenizer
 
 class NewsDataset(Dataset):
-    def __init__(self, is_small=False):
+    def __init__(self, is_small=False, mode='train'):
         
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-chinese')
-        if is_small:
-            filename = 'valid'
-        else:
-            filename = 'train'
-        keyword_file = f'preprocess/preprocessed_data/{filename}_keywords.txt'
-        title_file = f'preprocess/preprocessed_data/{filename}_titles.txt'
+        # if is_small:
+        #     filename = 'valid'
+        # else:
+        #     filename = 'train'
+        if is_small and mode == 'train':
+            mode = 'valid'
+        keyword_file = f'preprocess/preprocessed_data/{mode}_keywords.txt'
+        title_file = f'preprocess/preprocessed_data/{mode}_titles.txt'
         with open(keyword_file, 'r', encoding='utf-8') as f:
             self.keyword_data = f.read().strip().split('\n')
         with open(title_file, 'r', encoding='utf-8') as f:
