@@ -62,7 +62,7 @@ class Trainer:
     
 
     def _get_sep_pos(self, target_ids):
-        sep_pos = torch.zeros((target_ids.shape[0]))
+        sep_pos = torch.zeros((target_ids.shape[0]), dtype=torch.int32)
         for i in range(target_ids.shape[0]):
             for j in range(target_ids.shape[1]):
                 if target_ids[i][j] == 102:
@@ -71,19 +71,29 @@ class Trainer:
         return sep_pos
     
     def _run_batch(self, input_ids, attention_mask, target_ids, with_grad=True) -> float:
-        sep_pose = self._get_sep_pos(target_ids)
+        sep_pose = self._get_sep_pos(target_ids) # b
+        
         if with_grad:
             self.optimizer.zero_grad()
-            outputs = self.model(input_ids, attention_mask, target_ids)
+            outputs = self.model(input_ids, attention_mask, target_ids) # b,50,21128
+            target = torch.zeros_like(outputs, device=outputs.device) # b,50,21128
+            for i in range(outputs.shape[0]):
+                for j in range(target.shape[1]):
+                    target[i][j][target_ids[i][j]] = 1    
             # sep_pos = self.get_early_sep_pos(outputs, target_ids)
+            loss = torch.tensor([0.0], device=outputs.device)
+            for i in range(sep_pose.shape[0]):
+                single = torch.tensor([0.0], device=outputs.device)
+                for j in range(sep_pose[i].item()+1):
+                    single += self.criterion(outputs[i][j], target[i][j])
+                single /= (sep_pose[i].item()+1)
+                loss += single
             
-            # target = torch.zeros_like(output)
-            # for i in range(output.shape[0]):
-            #     for j in range(target.shape[1]):
-            #         target[i][j][target_ids[i][j]] = 1
 
             # loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
-            loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
+            # loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
+            
+            
             loss.backward()
             self.optimizer.step()
         else:
@@ -93,7 +103,19 @@ class Trainer:
                 # for i in range(outputs.shape[0]):
                 #     for j in range(target.shape[1]):
                 #         target[i][j][target_ids[i][j]] = 1
-                loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
+                # loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
+                target = torch.zeros_like(outputs, device=outputs.device) # b,50,21128
+                for i in range(outputs.shape[0]):
+                    for j in range(target.shape[1]):
+                        target[i][j][target_ids[i][j]] = 1    
+                # sep_pos = self.get_early_sep_pos(outputs, target_ids)
+                loss = torch.tensor([0.0], device=outputs.device)
+                for i in range(sep_pose.shape[0]):
+                    single = torch.tensor([0.0], device=outputs.device)
+                    for j in range(sep_pose[i].item()+1):
+                        single += self.criterion(outputs[i][j], target[i][j])
+                    single /= (sep_pose[i].item()+1)
+                    loss += single
         return loss.item()
     
     def _run_valid(self):
