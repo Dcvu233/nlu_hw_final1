@@ -58,11 +58,13 @@ class Trainer:
         else:
             self.model.module.load_state_dict(torch.load(check_point))
             self.start_epoch = int(check_point.split('.')[0].split('epoch')[1]) + 1
-        self.criterion = nn.CrossEntropyLoss()
+        # self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.CrossEntropyLoss(reduction='none')
+
     
 
     def _get_sep_pos(self, target_ids):
-        sep_pos = torch.zeros((target_ids.shape[0]), dtype=torch.int32)
+        sep_pos = torch.zeros((target_ids.shape[0]), dtype=torch.int32, device=target_ids.device)
         for i in range(target_ids.shape[0]):
             for j in range(target_ids.shape[1]):
                 if target_ids[i][j] == 102:
@@ -71,24 +73,42 @@ class Trainer:
         return sep_pos
     
     def _run_batch(self, input_ids, attention_mask, target_ids, with_grad=True) -> float:
-        sep_pose = self._get_sep_pos(target_ids) # b
+        sep_pos = self._get_sep_pos(target_ids) # b
         
         if with_grad:
             self.optimizer.zero_grad()
             outputs = self.model(input_ids, attention_mask, target_ids) # b,50,21128
-            target = torch.zeros_like(outputs, device=outputs.device) # b,50,21128
-            for i in range(outputs.shape[0]):
-                for j in range(target.shape[1]):
-                    target[i][j][target_ids[i][j]] = 1    
-            # sep_pos = self.get_early_sep_pos(outputs, target_ids)
-            loss = torch.tensor([0.0], device=outputs.device)
-            for i in range(sep_pose.shape[0]):
-                single = torch.tensor([0.0], device=outputs.device)
-                for j in range(sep_pose[i].item()+1):
-                    single += self.criterion(outputs[i][j], target[i][j])
-                single /= (sep_pose[i].item()+1)
-                loss += single
+            bs = outputs.shape[0] # b
+            seq_len = outputs.shape[1] # 50
+            vocab_size = outputs.shape[2] # 21128
+            # 计算了所有的 outputs的后面变pad，相当于算他对，这样每个样本的loss不均衡
+            # for i in range(outputs.shape[0]):
+            #     for j in range(sep_pos[i].item()+1, outputs.shape[1]):
+            #         outputs[i][j][:] = 0.0
+            #         outputs[i][j][0] = 1.0
+            # loss = self.criterion(outputs.permute(0, 2, 1), target_ids)
+            mask = torch.arange(seq_len, device=outputs.device).expand(bs, seq_len) <= sep_pos.view(-1, 1)
+            losses = self.criterion(outputs.view(-1, vocab_size), target_ids.view(-1))
+            losses = losses.view(bs, seq_len)
+            masked_losses = losses * mask.float()
+            mean_losses = masked_losses.sum(dim=1) / mask.float().sum(dim=1)
+            loss = mean_losses.mean()
+
+            # outputs sep的后面就不算了， 也算了平均值，但很慢
+            # target = torch.zeros_like(outputs, device=outputs.device) # b,50,21128
+            # for i in range(outputs.shape[0]):
+            #     for j in range(target.shape[1]):
+            #         target[i][j][target_ids[i][j]] = 1    
+            # loss = torch.tensor([0.0], device=outputs.device)
+            # for i in range(sep_pos.shape[0]):
+            #     single = torch.tensor([0.0], device=outputs.device)
+            #     for j in range(sep_pos[i].item()+1):
+            #         single += self.criterion(outputs[i][j], target[i][j])
+            #     single /= (sep_pos[i].item()+1)
+            #     loss += single
             
+            # 用掩码的方法算 更快
+
 
             # loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
             # loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
@@ -99,23 +119,15 @@ class Trainer:
         else:
             with torch.no_grad():
                 outputs = self.model(input_ids, attention_mask, target_ids)
-                # target = torch.zeros_like(outputs)
-                # for i in range(outputs.shape[0]):
-                #     for j in range(target.shape[1]):
-                #         target[i][j][target_ids[i][j]] = 1
-                # loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
-                target = torch.zeros_like(outputs, device=outputs.device) # b,50,21128
-                for i in range(outputs.shape[0]):
-                    for j in range(target.shape[1]):
-                        target[i][j][target_ids[i][j]] = 1    
-                # sep_pos = self.get_early_sep_pos(outputs, target_ids)
-                loss = torch.tensor([0.0], device=outputs.device)
-                for i in range(sep_pose.shape[0]):
-                    single = torch.tensor([0.0], device=outputs.device)
-                    for j in range(sep_pose[i].item()+1):
-                        single += self.criterion(outputs[i][j], target[i][j])
-                    single /= (sep_pose[i].item()+1)
-                    loss += single
+                bs = outputs.shape[0] # b
+                seq_len = outputs.shape[1] # 50
+                vocab_size = outputs.shape[2] # 21128
+                mask = torch.arange(seq_len, device=outputs.device).expand(bs, seq_len) <= sep_pos.view(-1, 1)
+                losses = self.criterion(outputs.view(-1, vocab_size), target_ids.view(-1))
+                losses = losses.view(bs, seq_len)
+                masked_losses = losses * mask.float()
+                mean_losses = masked_losses.sum(dim=1) / mask.float().sum(dim=1)
+                loss = mean_losses.mean()
         return loss.item()
     
     def _run_valid(self):

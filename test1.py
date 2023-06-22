@@ -100,6 +100,6 @@ def main(rank: int, world_size: int, check_point:str):
 
 if __name__ == '__main__':
     world_size = torch.cuda.device_count()
-    check_point = 'exp/2023-06-21_16:59:33/epoch18-valid_loss_0.00017228356273239363.pth'
+    check_point = 'exp/2023-06-22_13:28:16/epoch0-valid_loss_5.1956805274600075.pth'
     # os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
     mp.spawn(main, args=(world_size, check_point, ), nprocs=world_size)
