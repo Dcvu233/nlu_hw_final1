@@ -59,27 +59,41 @@ class Trainer:
             self.model.module.load_state_dict(torch.load(check_point))
             self.start_epoch = int(check_point.split('.')[0].split('epoch')[1]) + 1
         self.criterion = nn.CrossEntropyLoss()
-        
+    
 
+    def _get_sep_pos(self, target_ids):
+        sep_pos = torch.zeros((target_ids.shape[0]))
+        for i in range(target_ids.shape[0]):
+            for j in range(target_ids.shape[1]):
+                if target_ids[i][j] == 102:
+                    sep_pos[i] = j
+                    break
+        return sep_pos
+    
     def _run_batch(self, input_ids, attention_mask, target_ids, with_grad=True) -> float:
+        sep_pose = self._get_sep_pos(target_ids)
         if with_grad:
             self.optimizer.zero_grad()
-            output = self.model(input_ids, attention_mask, target_ids)
-            target = torch.zeros_like(output)
-            for i in range(output.shape[0]):
-                for j in range(target.shape[1]):
-                    target[i][j][target_ids[i][j]] = 1
-            loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
+            outputs = self.model(input_ids, attention_mask, target_ids)
+            # sep_pos = self.get_early_sep_pos(outputs, target_ids)
+            
+            # target = torch.zeros_like(output)
+            # for i in range(output.shape[0]):
+            #     for j in range(target.shape[1]):
+            #         target[i][j][target_ids[i][j]] = 1
+
+            # loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
+            loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
             loss.backward()
             self.optimizer.step()
         else:
             with torch.no_grad():
-                output = self.model(input_ids, attention_mask, target_ids)
-                target = torch.zeros_like(output)
-                for i in range(output.shape[0]):
-                    for j in range(target.shape[1]):
-                        target[i][j][target_ids[i][j]] = 1
-                loss = self.criterion(output.permute(0, 2, 1), target.permute(0, 2, 1))
+                outputs = self.model(input_ids, attention_mask, target_ids)
+                # target = torch.zeros_like(outputs)
+                # for i in range(outputs.shape[0]):
+                #     for j in range(target.shape[1]):
+                #         target[i][j][target_ids[i][j]] = 1
+                loss = self.criterion(outputs.permute(0, 2, 1)[:, :, :(sep_pose+1)], target_ids[:, :(sep_pose+1)])
         return loss.item()
     
     def _run_valid(self):
